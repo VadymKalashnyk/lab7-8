@@ -53,36 +53,31 @@ jobs:
           terraform_version: "1.5.7"
           terraform_wrapper: false
 
-      - name: Terraform Format
-        run: terraform fmt -check
-        working-directory: terraform
-        continue-on-error: true
-
       - name: Terraform Init
         run: terraform init
         working-directory: terraform
 
-      - name: Terraform Apply (Create ECR)
-        run: terraform apply -target=aws_ecr_repository.flask_repo -input=false -auto-approve
+      - name: Terraform Apply (Ensure Lightsail Service)
+        run: terraform apply -target=aws_lightsail_container_service.flask_service -input=false -auto-approve
         working-directory: terraform
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build, tag, and push image to Amazon ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: flask_app_repository
-          IMAGE_TAG: ${{ github.sha }}
+      - name: Install lightsailctl plugin
         run: |
-          docker build --provenance=false --sbom=false -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          sudo curl -sSL "https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl" -o "/usr/local/bin/lightsailctl"
+          sudo chmod +x "/usr/local/bin/lightsailctl"
+
+      - name: Build and push image to Lightsail
+        run: |
+          docker build -t flask-app:latest .
+          PUSH_OUTPUT=$(aws lightsail push-container-image --region eu-north-1 --service-name flask-app-service --label flask-app --image flask-app:latest)
+          echo "$PUSH_OUTPUT"
+          IMAGE_NAME=$(echo "$PUSH_OUTPUT" | grep "Refer to this image as" | sed -E 's/.*Refer to this image as "([^"]+)".*/\1/')
+          echo "LIGHTSAIL_IMAGE=$IMAGE_NAME" >> $GITHUB_ENV
 
       - name: Terraform Plan
-        run: terraform plan -var="image_tag=${{ github.sha }}" -no-color -input=false -refresh=true
+        run: terraform plan -var="lightsail_image=${{ env.LIGHTSAIL_IMAGE }}" -no-color -input=false -refresh=true
         working-directory: terraform
 
-      - name: Terraform Apply (Deploy Lightsail)
-        run: terraform apply -var="image_tag=${{ github.sha }}" -input=false -auto-approve
+      - name: Terraform Apply (Deploy Container)
+        run: terraform apply -var="lightsail_image=${{ env.LIGHTSAIL_IMAGE }}" -input=false -auto-approve
         working-directory: terraform

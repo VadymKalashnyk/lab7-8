@@ -20,63 +20,27 @@ provider "aws" {
   region = "eu-north-1"
 }
 
-variable "image_tag" {
-  description = "Тег Docker-образу (хеш коміту GitHub)"
+variable "lightsail_image" {
+  description = "Ідентифікатор образу у внутрішньому сховищі Lightsail"
   type        = string
-  default     = "latest"
+  default     = ""
 }
 
-# 1. Приватний реєстр Amazon ECR для Docker-образу
-resource "aws_ecr_repository" "flask_repo" {
-  name                 = "flask_app_repository"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
-}
-
-# 2. Контейнерний сервіс Amazon Lightsail
+# 1. Контейнерний сервіс Amazon Lightsail
 resource "aws_lightsail_container_service" "flask_service" {
   name        = "flask-app-service"
   power       = "nano"
   scale       = 1
   is_disabled = false
-
-  private_registry_access {
-    ecr_image_puller_role {
-      is_active = true
-    }
-  }
 }
 
-# 3. Дозвіл для Lightsail завантажувати образ із приватного ECR
-resource "aws_ecr_repository_policy" "lightsail_pull_policy" {
-  repository = aws_ecr_repository.flask_repo.name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowLightsailPull"
-        Effect = "Allow"
-        Principal = {
-          AWS = aws_lightsail_container_service.flask_service.private_registry_access[0].ecr_image_puller_role[0].principal_arn
-        }
-        Action = [
-          "ecr:BatchGetImage",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchCheckLayerAvailability"
-        ]
-      }
-    ]
-  })
-}
-
-# 4. Розгортання контейнера з Flask-застосунком у Lightsail
+# 2. Розгортання контейнера з Flask-застосунком
 resource "aws_lightsail_container_service_deployment_version" "flask_deployment" {
   service_name = aws_lightsail_container_service.flask_service.name
 
   container {
     container_name = "flask-app"
-    image          = "${aws_ecr_repository.flask_repo.repository_url}:${var.image_tag}"
+    image          = var.lightsail_image
 
     ports = {
       "8080" = "HTTP"
@@ -96,13 +60,6 @@ resource "aws_lightsail_container_service_deployment_version" "flask_deployment"
       success_codes       = "200-499"
     }
   }
-
-  depends_on = [aws_ecr_repository_policy.lightsail_pull_policy]
-}
-
-output "ecr_repository_url" {
-  description = "URL репозиторію в Amazon ECR"
-  value       = aws_ecr_repository.flask_repo.repository_url
 }
 
 output "lightsail_service_url" {
